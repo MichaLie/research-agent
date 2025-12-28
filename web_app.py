@@ -474,6 +474,46 @@ HTML_TEMPLATE = """
         .tab:hover { background: #e2e8f0; }
         .tab.active {
             background: #7c3aed;
+            color: white;
+        }
+
+        .chat-section {
+            margin-top: 1.5rem;
+            border-top: 1px solid #e2e8f0;
+            padding-top: 1rem;
+        }
+        .chat-messages {
+            max-height: 300px;
+            overflow-y: auto;
+            margin-bottom: 1rem;
+            padding: 1rem;
+            background: #f8fafc;
+            border-radius: 8px;
+            border: 1px solid #e2e8f0;
+        }
+        .chat-message {
+            margin-bottom: 1rem;
+            padding: 0.75rem 1rem;
+            border-radius: 12px;
+        }
+        .chat-message.user {
+            background: #7c3aed;
+            color: white;
+            margin-left: 20%;
+        }
+        .chat-message.assistant {
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            margin-right: 10%;
+        }
+        .chat-message.assistant p { margin-bottom: 0.5rem; }
+        .chat-message.assistant p:last-child { margin-bottom: 0; }
+        .chat-input-row {
+            display: flex;
+            gap: 0.5rem;
+        }
+        .chat-input-row input {
+            flex: 1;
         }
     </style>
 </head>
@@ -504,6 +544,7 @@ HTML_TEMPLATE = """
                                 <option value="quick">Quick Summary</option>
                                 <option value="methodology">Methodology Focus</option>
                                 <option value="contradictions">Critical Analysis</option>
+                                <option value="brutal">Brutal Critic (Reviewer 2 Mode)</option>
                             </select>
                         </div>
                     </div>
@@ -537,6 +578,15 @@ HTML_TEMPLATE = """
                     <div id="analysisTab" class="result-content"></div>
                     <div id="citationsTab" class="result-content" style="display: none;"></div>
                     <div id="metadataTab" class="result-content" style="display: none;"></div>
+
+                    <div class="chat-section" id="chatSection" style="display: none;">
+                        <div class="panel-title" style="margin-top: 1.5rem;">💬 Chat About This Paper</div>
+                        <div class="chat-messages" id="chatMessages"></div>
+                        <div class="chat-input-row">
+                            <input type="text" id="chatInput" placeholder="Ask a follow-up question about this paper..." />
+                            <button class="btn btn-primary" id="chatSendBtn">Send</button>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="panel" id="welcomePanel">
@@ -575,6 +625,10 @@ HTML_TEMPLATE = """
 
         let currentAnalysisId = null;
         let currentData = null;
+        const chatSection = document.getElementById('chatSection');
+        const chatMessages = document.getElementById('chatMessages');
+        const chatInput = document.getElementById('chatInput');
+        const chatSendBtn = document.getElementById('chatSendBtn');
 
         // Tab switching
         document.querySelectorAll('.tab').forEach(tab => {
@@ -674,6 +728,10 @@ HTML_TEMPLATE = """
                         <p><strong>Analyzed:</strong> ${data.started}</p>
                     `;
 
+                    // Enable chat
+                    chatSection.style.display = 'block';
+                    chatMessages.innerHTML = '<div style="color: #64748b; text-align: center;">Ask follow-up questions about this paper...</div>';
+
                     loadHistory();
                 } else if (data.status === 'error') {
                     showStatus('error', 'Error: ' + data.error);
@@ -730,14 +788,62 @@ HTML_TEMPLATE = """
 
                 if (data.content) {
                     currentData = data;
+                    currentAnalysisId = analysisId;
                     welcomePanel.style.display = 'none';
                     resultPanel.style.display = 'block';
                     analysisTab.innerHTML = marked.parse(data.content);
                     document.getElementById('resultTitle').textContent = '📊 ' + (data.title || data.filename || 'Analysis');
                     showStatus('complete', '✅ Loaded from history');
+
+                    // Enable chat
+                    chatSection.style.display = 'block';
+                    chatMessages.innerHTML = '<div style="color: #64748b; text-align: center;">Ask follow-up questions about this paper...</div>';
                 }
             } catch (e) {
                 showStatus('error', 'Failed to load analysis');
+            }
+        }
+
+        // Chat functionality
+        chatSendBtn.addEventListener('click', sendChat);
+        chatInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendChat();
+        });
+
+        async function sendChat() {
+            const question = chatInput.value.trim();
+            if (!question || !currentData) return;
+
+            // Add user message
+            const userMsg = document.createElement('div');
+            userMsg.className = 'chat-message user';
+            userMsg.textContent = question;
+            chatMessages.innerHTML = '';  // Clear placeholder if present
+            chatMessages.appendChild(userMsg);
+            chatInput.value = '';
+
+            // Add loading indicator
+            const loadingMsg = document.createElement('div');
+            loadingMsg.className = 'chat-message assistant';
+            loadingMsg.innerHTML = '<span class="spinner"></span> Thinking...';
+            chatMessages.appendChild(loadingMsg);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+
+            try {
+                const response = await fetch('/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        analysis_id: currentAnalysisId,
+                        question: question
+                    })
+                });
+                const data = await response.json();
+
+                loadingMsg.innerHTML = marked.parse(data.response || data.error || 'No response');
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+            } catch (error) {
+                loadingMsg.innerHTML = 'Error: ' + error.message;
             }
         }
 
@@ -842,6 +948,61 @@ def download_file(filename):
     if file_path.exists():
         return send_file(file_path, as_attachment=True)
     return jsonify({"error": "File not found"}), 404
+
+
+@app.route('/chat', methods=['POST'])
+def chat():
+    """Handle follow-up questions about a paper."""
+    data = request.get_json()
+    analysis_id = data.get('analysis_id')
+    question = data.get('question')
+
+    if not analysis_id or not question:
+        return jsonify({"error": "Missing analysis_id or question"}), 400
+
+    # Get the analysis and paper content
+    db_analysis = get_analysis(analysis_id)
+    if not db_analysis:
+        return jsonify({"error": "Analysis not found"}), 404
+
+    paper_summary = ""
+    if db_analysis.get('paper_id'):
+        paper = get_paper(db_analysis['paper_id'])
+        if paper:
+            paper_summary = paper.get('text_content', '')[:15000]  # Limit context
+
+    previous_analysis = db_analysis.get('content', '')[:8000]
+
+    # Format chat prompt
+    from prompts import format_chat_prompt
+    chat_prompt = format_chat_prompt(paper_summary, previous_analysis, question)
+
+    # Run chat query with Claude
+    try:
+        import asyncio
+        from claude_agent_sdk import query, ClaudeAgentOptions, AssistantMessage
+
+        async def get_response():
+            content_parts = []
+            async for message in query(
+                prompt=chat_prompt,
+                options=ClaudeAgentOptions(
+                    model=DEFAULT_MODEL,
+                    allowed_tools=["WebSearch", "WebFetch"],
+                    permission_mode="default"
+                )
+            ):
+                if isinstance(message, AssistantMessage):
+                    for block in message.content:
+                        if hasattr(block, "text") and block.text:
+                            content_parts.append(block.text)
+            return "\\n\\n".join(content_parts)
+
+        response = asyncio.run(get_response())
+        return jsonify({"response": response})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # =============================================================================

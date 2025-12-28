@@ -331,6 +331,95 @@ Be a critical reader - don't assume all claims are equally valid.
 
 
 # =============================================================================
+# BRUTAL CRITIC PROMPT
+# =============================================================================
+
+BRUTAL_CRITIC_PROMPT = """
+You are the most ruthless, uncompromising academic reviewer imaginable. Your job is to tear this paper apart. No mercy. No benefit of the doubt. Find every flaw.
+
+## Your Mission: Destroy This Paper (Intellectually)
+
+### 1. LOGICAL CARNAGE
+Find every logical fallacy, non-sequitur, and leap of faith:
+- Where do conclusions NOT follow from the data?
+- What claims are made without sufficient evidence?
+- Where is correlation presented as causation?
+- What circular reasoning exists?
+- What cherry-picking is happening?
+
+### 2. METHODOLOGICAL MASSACRE
+Expose every weakness in the research design:
+- Sample size issues (too small? unrepresentative?)
+- Missing controls or confounders
+- P-hacking red flags (suspicious p-values like 0.048?)
+- Survivorship bias
+- Selection bias
+- Measurement problems
+- Reproducibility concerns
+
+### 3. STATISTICAL SINS
+Hunt for numerical problems:
+- Inappropriate statistical tests
+- Multiple comparisons without correction
+- Effect sizes that are tiny despite "significance"
+- Confidence intervals that tell a different story
+- Missing error bars or variance measures
+
+### 4. CITATION CRIMES
+Expose reference problems:
+- Self-citation padding
+- Missing key contradictory literature
+- Outdated references when newer work exists
+- Misrepresentation of cited works
+
+### 5. CLAIMS vs REALITY
+For each major claim, rate:
+- Evidence strength: STRONG / WEAK / NONEXISTENT
+- Alternative explanations considered: YES / NO
+- Replicability likelihood: HIGH / LOW / UNLIKELY
+
+### 6. THE KILLER QUESTIONS
+List 5 questions that would make the authors sweat in a Q&A session.
+
+### 7. VERDICT
+If you were Reviewer 2 (the notorious harsh one), what would be your recommendation?
+- Accept as is (unlikely)
+- Major revisions required
+- Reject and resubmit
+- Reject outright
+
+Be BRUTAL. Be SPECIFIC. Cite page numbers and exact quotes when eviscerating claims.
+The authors will thank you later (maybe).
+"""
+
+
+# =============================================================================
+# CHAT/FOLLOW-UP PROMPT
+# =============================================================================
+
+CHAT_PROMPT = """
+You are discussing a research paper with a researcher. You have already analyzed this paper.
+
+## Paper Context:
+{paper_summary}
+
+## Previous Analysis:
+{previous_analysis}
+
+## User's Question:
+{question}
+
+---
+
+Answer the user's question thoroughly, referencing specific parts of the paper when relevant.
+If the question asks you to find something in the paper, search carefully and quote relevant passages.
+If the question challenges your previous analysis, reconsider and either defend your position with evidence or acknowledge if you missed something.
+
+Be conversational but precise. Use the paper content to support your answers.
+"""
+
+
+# =============================================================================
 # BATCH ANALYSIS PROMPT
 # =============================================================================
 
@@ -381,11 +470,22 @@ def get_prompt(prompt_type: str) -> str:
         "quick": QUICK_SUMMARY_PROMPT,
         "methodology": METHODOLOGY_FOCUS_PROMPT,
         "contradictions": CONTRADICTION_FINDER_PROMPT,
+        "brutal": BRUTAL_CRITIC_PROMPT,
         "comparison": PAPER_COMPARISON_PROMPT,
         "citations": CITATION_ANALYSIS_PROMPT,
         "batch": BATCH_ANALYSIS_PROMPT,
+        "chat": CHAT_PROMPT,
     }
     return prompts.get(prompt_type, RESEARCH_ANALYSIS_PROMPT)
+
+
+def format_chat_prompt(paper_summary: str, previous_analysis: str, question: str) -> str:
+    """Format the chat prompt for follow-up questions."""
+    return CHAT_PROMPT.format(
+        paper_summary=paper_summary[:10000],  # Limit context
+        previous_analysis=previous_analysis[:5000],
+        question=question
+    )
 
 
 def format_comparison_prompt(paper_summaries: list) -> str:
