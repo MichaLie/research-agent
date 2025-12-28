@@ -12,7 +12,7 @@ from pathlib import Path
 # =============================================================================
 
 # Use Claude Opus 4.5 for best analysis quality
-DEFAULT_MODEL = "claude-opus-4-5-20250514"
+DEFAULT_MODEL = "claude-opus-4-5-20251101"
 
 # Alternative models (for cost-sensitive use cases)
 FAST_MODEL = "claude-sonnet-4-20250514"
