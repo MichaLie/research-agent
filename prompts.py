@@ -1,8 +1,13 @@
 """
 Research Analysis Prompts
 =========================
-Prompts for multi-stage paper analysis and synthesis.
+Prompts for multi-stage paper analysis, comparison, and synthesis.
+Enhanced with citation-aware and multi-paper support.
 """
+
+# =============================================================================
+# MAIN ANALYSIS PROMPT
+# =============================================================================
 
 RESEARCH_ANALYSIS_PROMPT = """
 You are a research synthesis agent helping researchers deeply understand academic papers.
@@ -108,44 +113,312 @@ If asked to save a report, write it to `analysis_report.md` in the current direc
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Begin by finding and reading the PDF(s), then work through each stage.
+Begin by reading the paper content provided, then work through each stage.
 """
 
 
-# Alternative prompts for specific use cases
+# =============================================================================
+# PAPER COMPARISON PROMPT
+# =============================================================================
+
+PAPER_COMPARISON_PROMPT = """
+You are comparing multiple research papers to identify relationships, contradictions, and synthesis opportunities.
+
+## Papers to Compare:
+{paper_summaries}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+## 📊 COMPARISON FRAMEWORK
+
+### 1. Research Questions & Scope
+| Paper | Main Question | Scope | Population/Context |
+|-------|--------------|-------|-------------------|
+
+### 2. Methodological Comparison
+| Paper | Study Design | Data Sources | Sample Size | Analysis Methods |
+|-------|--------------|--------------|-------------|------------------|
+
+### 3. Key Findings Comparison
+- **Points of Agreement**: Where do these papers converge?
+- **Points of Disagreement**: Where do they diverge or contradict?
+- **Complementary Findings**: How do they extend each other?
+
+### 4. Evidence Quality Assessment
+| Paper | Strengths | Limitations | Generalizability |
+|-------|-----------|-------------|------------------|
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+## 🔗 SYNTHESIS
+
+### Cross-Paper Themes
+Identify 3-5 major themes that emerge across all papers.
+
+### Gaps in the Literature
+What questions remain unanswered even after considering all papers together?
+
+### Contradictions to Resolve
+What disagreements need further research to resolve?
+
+### Integrated Conclusions
+What can we conclude with confidence based on the combined evidence?
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+## 📚 RECOMMENDED FOLLOW-UP
+
+Based on this comparison, suggest:
+1. Additional papers that would fill identified gaps
+2. Research questions for future studies
+3. Practical implications of the synthesized findings
+"""
+
+
+# =============================================================================
+# CITATION ANALYSIS PROMPT
+# =============================================================================
+
+CITATION_ANALYSIS_PROMPT = """
+You are analyzing citations and references from a research paper.
+
+## Extracted Citations:
+{citations}
+
+## Paper Context:
+{paper_summary}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+## Citation Analysis Tasks:
+
+### 1. Citation Network
+- Identify the most frequently cited works
+- Categorize citations by type (foundational, methodological, supporting, contrasting)
+- Map the intellectual lineage of this research
+
+### 2. Key Sources to Explore
+Which cited papers should be read to better understand this work?
+Prioritize by:
+- Foundational importance
+- Methodological relevance
+- Recency and impact
+
+### 3. Citation Gaps
+Are there important works in this field that seem to be missing?
+Are there one-sided citation patterns (only supporting, no critical works)?
+
+### 4. Follow-up Recommendations
+Based on the citation analysis:
+- What foundational papers should be read first?
+- What recent papers might extend this work?
+- What critical/contrasting perspectives should be explored?
+"""
+
+
+# =============================================================================
+# QUICK SUMMARY PROMPT
+# =============================================================================
 
 QUICK_SUMMARY_PROMPT = """
-Provide a concise summary of each PDF:
-- Main argument (2-3 sentences)
-- Key findings (bullet points)
-- Methodology (1 sentence)
-- Limitations noted
+Provide a concise summary of this paper:
+
+**One-Sentence Summary:**
+[Capture the essence in one sentence]
+
+**Main Argument:**
+[2-3 sentences]
+
+**Key Findings:**
+- Finding 1
+- Finding 2
+- Finding 3
+
+**Methodology:**
+[1 sentence describing the approach]
+
+**Limitations:**
+- Limitation 1
+- Limitation 2
+
+**Relevance Score:** [1-5 stars based on potential impact]
 
 Keep it brief - this is for quick triage.
 """
 
 
+# =============================================================================
+# METHODOLOGY FOCUS PROMPT
+# =============================================================================
+
 METHODOLOGY_FOCUS_PROMPT = """
-Focus specifically on methodology across these papers:
+Focus specifically on methodology in this paper:
 
-1. **Study Design**: What type of study? (experimental, observational, review, etc.)
-2. **Data**: Sources, sample sizes, collection methods
-3. **Analysis**: Statistical or qualitative methods used
-4. **Validity**: Internal and external validity considerations
-5. **Reproducibility**: Could this be replicated? What's missing?
+## Study Design Analysis
 
-Compare methodological choices across papers and identify best practices.
+### 1. Study Type
+- What type of study is this? (experimental, observational, review, meta-analysis, etc.)
+- Is this design appropriate for the research question?
+
+### 2. Data Collection
+- Data sources used
+- Sample size and selection criteria
+- Collection methods and instruments
+- Time period covered
+
+### 3. Analysis Methods
+- Statistical or qualitative methods used
+- Software/tools mentioned
+- Handling of missing data
+- Control for confounders
+
+### 4. Validity Assessment
+| Aspect | Strengths | Weaknesses |
+|--------|-----------|------------|
+| Internal validity | | |
+| External validity | | |
+| Construct validity | | |
+
+### 5. Reproducibility
+- Could this be replicated?
+- What information is missing for replication?
+- Are data/code available?
+
+### 6. Methodological Recommendations
+- What would strengthen this methodology?
+- Alternative approaches that could be used
 """
 
+
+# =============================================================================
+# CONTRADICTION FINDER PROMPT
+# =============================================================================
 
 CONTRADICTION_FINDER_PROMPT = """
-Your task is to find disagreements and tensions:
+Your task is to find disagreements, tensions, and contradictions:
 
-1. Read all papers carefully
-2. Identify claims that contradict each other
-3. Note methodological differences that might explain contradictions
-4. Highlight areas of genuine scientific disagreement
-5. Suggest what evidence would resolve the contradictions
+## Critical Analysis Framework
 
-Be a critical reader - don't assume all papers are equally valid.
+### 1. Internal Contradictions
+Within the paper itself:
+- Do all claims follow logically from the evidence?
+- Are there statements that contradict each other?
+- Does the data fully support the conclusions?
+
+### 2. External Contradictions
+Against the broader literature:
+- What established findings does this contradict?
+- Are there alternative interpretations of the same data?
+- What would critics of this work argue?
+
+### 3. Methodological Concerns
+- Are the methods appropriate for the claims made?
+- What biases might affect the results?
+- What alternative explanations weren't considered?
+
+### 4. Logical Gaps
+- Where does the reasoning skip steps?
+- What assumptions are being made?
+- What evidence is missing?
+
+### 5. Resolution Paths
+For each contradiction found:
+- What additional evidence would resolve it?
+- What experiments could test the competing hypotheses?
+
+Be a critical reader - don't assume all claims are equally valid.
 """
+
+
+# =============================================================================
+# BATCH ANALYSIS PROMPT
+# =============================================================================
+
+BATCH_ANALYSIS_PROMPT = """
+You are analyzing a batch of {count} research papers.
+
+## Batch Overview
+{paper_list}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+## Tasks:
+
+### 1. Quick Triage
+For each paper, provide:
+- Title
+- Main topic (1 sentence)
+- Relevance score (1-5)
+- Priority for deeper analysis (High/Medium/Low)
+
+### 2. Thematic Clustering
+Group the papers by:
+- Topic/subject area
+- Methodology type
+- Theoretical framework
+
+### 3. Reading Order Recommendation
+In what order should these papers be read for best understanding?
+Consider dependencies (foundational works first) and logical flow.
+
+### 4. Cross-Paper Analysis Plan
+What comparisons would be most valuable across these papers?
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Begin with the triage, then proceed to clustering and recommendations.
+"""
+
+
+# =============================================================================
+# HELPER FUNCTIONS
+# =============================================================================
+
+def get_prompt(prompt_type: str) -> str:
+    """Get a prompt by type name."""
+    prompts = {
+        "default": RESEARCH_ANALYSIS_PROMPT,
+        "quick": QUICK_SUMMARY_PROMPT,
+        "methodology": METHODOLOGY_FOCUS_PROMPT,
+        "contradictions": CONTRADICTION_FINDER_PROMPT,
+        "comparison": PAPER_COMPARISON_PROMPT,
+        "citations": CITATION_ANALYSIS_PROMPT,
+        "batch": BATCH_ANALYSIS_PROMPT,
+    }
+    return prompts.get(prompt_type, RESEARCH_ANALYSIS_PROMPT)
+
+
+def format_comparison_prompt(paper_summaries: list) -> str:
+    """Format the comparison prompt with paper summaries."""
+    summaries_text = "\n\n---\n\n".join([
+        f"### Paper {i+1}: {p.get('title', 'Unknown')}\n{p.get('summary', 'No summary available')}"
+        for i, p in enumerate(paper_summaries)
+    ])
+    return PAPER_COMPARISON_PROMPT.format(paper_summaries=summaries_text)
+
+
+def format_citation_prompt(citations: list, paper_summary: str) -> str:
+    """Format the citation analysis prompt."""
+    citations_text = "\n".join([
+        f"- {c.get('title', c.get('doi', 'Unknown'))}" +
+        (f" ({c.get('year', 'n.d.')})" if c.get('year') else "") +
+        (f" - {c.get('citation_count', 0)} citations" if c.get('citation_count') else "")
+        for c in citations[:50]  # Limit to 50 citations
+    ])
+    return CITATION_ANALYSIS_PROMPT.format(
+        citations=citations_text,
+        paper_summary=paper_summary
+    )
+
+
+def format_batch_prompt(papers: list) -> str:
+    """Format the batch analysis prompt."""
+    paper_list = "\n".join([
+        f"{i+1}. **{p.get('filename', 'Unknown')}**" +
+        (f" - {p.get('title', '')}" if p.get('title') else "")
+        for i, p in enumerate(papers)
+    ])
+    return BATCH_ANALYSIS_PROMPT.format(
+        count=len(papers),
+        paper_list=paper_list
+    )

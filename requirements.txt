@@ -1,3 +1,15 @@
+# Claude Agent SDK for Opus 4.5 analysis
 claude-agent-sdk>=0.1.0
+
+# PDF processing
 pymupdf>=1.26.0
+
+# Web application
 flask>=3.0.0
+
+# No additional dependencies needed - using stdlib:
+# - sqlite3 (database persistence)
+# - urllib (Semantic Scholar API)
+# - hashlib (file hashing)
+# - dataclasses (data structures)
+# - asyncio (async analysis)

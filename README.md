@@ -1,25 +1,36 @@
 # Research Paper Analyzer
 
-A drag & drop web interface for analyzing research papers using Claude AI. Upload a PDF and get a comprehensive multi-stage analysis including methodology review, critical gaps, and suggested follow-up literature searches.
+A powerful research paper analysis tool powered by **Claude Opus 4.5**. Upload PDFs via drag & drop web UI or CLI, and get comprehensive multi-stage analysis including methodology review, citation enrichment, and follow-up literature suggestions.
 
 ![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)
+![Claude Opus 4.5](https://img.shields.io/badge/Claude-Opus%204.5-purple.svg)
 ![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
 
-## What It Does
+## Features
+
+- **Claude Opus 4.5** - Best-in-class reasoning for deep paper analysis
+- **SQLite Persistence** - All analyses saved and searchable
+- **Citation Enrichment** - Automatic DOI/arXiv extraction + Semantic Scholar metadata
+- **Multiple Analysis Modes** - Full, Quick, Methodology, Critical analysis
+- **Batch & Compare** - Analyze multiple papers or compare them side-by-side
+- **Smart Chunking** - Handles very long papers without truncation
+- **Rate Limiting** - Built-in security for API protection
+
+## Analysis Pipeline
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  STAGE 1: Extract & Summarize                               │
 │  → Core thesis, methodology, findings, evidence quality     │
 ├─────────────────────────────────────────────────────────────┤
-│  STAGE 2: Deep Reasoning                                    │
+│  STAGE 2: Deep Reasoning (Opus 4.5)                         │
 │  → Connections, contradictions, gaps, unstated assumptions  │
 ├─────────────────────────────────────────────────────────────┤
-│  STAGE 3: Research Directions                               │
-│  → Proposes follow-up searches with rationale               │
+│  STAGE 3: Citation Analysis                                 │
+│  → DOI/arXiv extraction, Semantic Scholar enrichment        │
 ├─────────────────────────────────────────────────────────────┤
-│  STAGE 4: Interactive Exploration                           │
-│  → Executes searches (with your approval) & synthesizes     │
+│  STAGE 4: Research Directions                               │
+│  → Proposes follow-up searches with rationale               │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -32,7 +43,7 @@ A drag & drop web interface for analyzing research papers using Claude AI. Uploa
 
 1. **Clone the repository:**
 ```bash
-git clone https://github.com/YOUR_USERNAME/research-agent.git
+git clone https://github.com/MichaLie/research-agent.git
 cd research-agent
 ```
 
@@ -53,7 +64,6 @@ python3.12 -m pip install -r requirements.txt
 ```bash
 claude
 ```
-This will guide you through authentication if needed.
 
 ## Usage
 
@@ -68,58 +78,106 @@ Or manually:
 python3.12 web_app.py
 ```
 
-Then open **http://localhost:5000** in your browser and drag & drop a PDF.
+Open **http://localhost:5000** and drag & drop a PDF.
 
-**Features:**
+**Web UI Features:**
 - Drag & drop PDF upload
-- Real-time analysis progress
-- Beautiful formatted results
+- 4 analysis types (Full, Quick, Methodology, Critical)
+- Real-time streaming results
+- Citation extraction with metadata
+- Analysis history sidebar
 - Export to Markdown
-- View previous analyses
 
 ### Command Line
 
 ```bash
-python3.12 agent.py                     # Analyze all PDFs in ./papers/
-python3.12 agent.py /path/to/papers     # Analyze PDFs in custom directory
-python3.12 agent.py paper.pdf           # Analyze a single PDF
+# Analyze all PDFs in ./papers/
+python3.12 agent.py
+
+# Analyze PDFs in custom directory
+python3.12 agent.py /path/to/papers
+
+# Analyze a single PDF
+python3.12 agent.py paper.pdf
+
+# Batch analyze with triage
+python3.12 agent.py --batch papers/
+
+# Compare multiple papers
+python3.12 agent.py --compare paper1.pdf paper2.pdf
+
+# Use specific prompt type
+python3.12 agent.py paper.pdf --prompt methodology
+python3.12 agent.py paper.pdf --prompt quick
+python3.12 agent.py paper.pdf --prompt contradictions
 ```
 
 ## Project Structure
 
 ```
 research-agent/
-├── agent.py          # CLI version
-├── web_app.py        # Web UI version
-├── prompts.py        # Analysis prompts (customizable)
-├── start.sh          # Launch script
-├── requirements.txt  # Dependencies
-├── papers/           # Put your PDFs here (CLI mode)
-├── uploads/          # Web UI uploads (auto-created)
-└── analyses/         # Saved analyses (auto-created)
+├── agent.py              # CLI with Opus 4.5
+├── web_app.py            # Web UI
+├── config.py             # Central configuration
+├── database.py           # SQLite persistence
+├── pdf_extractor.py      # Enhanced PDF extraction
+├── semantic_scholar.py   # Citation API integration
+├── prompts.py            # Analysis prompts
+├── start.sh              # Launch script
+├── requirements.txt      # Dependencies
+├── papers/               # Put your PDFs here (CLI mode)
+├── uploads/              # Web UI uploads (auto-created)
+├── output/               # Saved analyses (auto-created)
+└── research_papers.db    # SQLite database (auto-created)
 ```
 
-## Customizing the Analysis
+## Configuration
 
-Edit `prompts.py` to customize the analysis. Available prompts:
-
-- `RESEARCH_ANALYSIS_PROMPT` - Comprehensive 4-stage analysis (default)
-- `QUICK_SUMMARY_PROMPT` - Fast triage mode
-- `METHODOLOGY_FOCUS_PROMPT` - Deep dive on research methods
-- `CONTRADICTION_FINDER_PROMPT` - Find disagreements between papers
-
-To switch prompts, edit the import in `agent.py` or `web_app.py`:
+Edit `config.py` to customize:
 
 ```python
-from prompts import METHODOLOGY_FOCUS_PROMPT as RESEARCH_ANALYSIS_PROMPT
+# Model (uses Opus 4.5 by default)
+DEFAULT_MODEL = "claude-opus-4-5-20250514"
+
+# Limits
+MAX_FILE_SIZE_MB = 50
+MAX_TEXT_LENGTH = 100000
+MAX_UPLOADS_PER_HOUR = 20
+CHUNK_SIZE = 30000
 ```
 
-## How It Works
+## Analysis Prompt Types
 
-1. PDFs are converted to text using PyMuPDF (handles large files)
-2. Text is sent to Claude via the Claude Agent SDK
-3. Claude analyzes using the configured prompt
-4. Results stream in real-time and are saved as markdown
+| Type | Description | Use Case |
+|------|-------------|----------|
+| `default` | Comprehensive 4-stage analysis | Deep understanding |
+| `quick` | Fast triage summary | Literature review |
+| `methodology` | Focus on research methods | Methods evaluation |
+| `contradictions` | Find disagreements & gaps | Critical analysis |
+| `comparison` | Compare multiple papers | Literature synthesis |
+| `batch` | Triage multiple papers | Survey creation |
+
+## Semantic Scholar Integration
+
+The tool automatically:
+1. Extracts DOIs, arXiv IDs, and PMIDs from paper text
+2. Enriches citations with Semantic Scholar metadata
+3. Shows citation counts, venues, and abstracts
+
+To use the Semantic Scholar API with higher rate limits, set:
+```python
+# In config.py
+SEMANTIC_SCHOLAR_API_KEY = "your-api-key"
+```
+
+## Database Schema
+
+Papers and analyses are stored in SQLite (`research_papers.db`):
+
+- **papers** - Uploaded PDFs with extracted text
+- **analyses** - All analysis results
+- **citations** - Extracted citations with metadata
+- **comparisons** - Paper comparison results
 
 ## Troubleshooting
 
@@ -139,6 +197,9 @@ python3.12 -m pip install -r requirements.txt
 claude  # Follow the authentication prompts
 ```
 
+**"Rate limit exceeded"**
+Wait a few minutes or increase `MAX_UPLOADS_PER_HOUR` in config.py
+
 ## License
 
 MIT License - feel free to use and modify!
@@ -146,6 +207,8 @@ MIT License - feel free to use and modify!
 ## Acknowledgments
 
 Built with:
-- [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python) by Anthropic
+- [Claude Opus 4.5](https://www.anthropic.com/claude) by Anthropic
+- [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python)
 - [PyMuPDF](https://pymupdf.readthedocs.io/) for PDF processing
+- [Semantic Scholar API](https://www.semanticscholar.org/product/api) for citation data
 - [Flask](https://flask.palletsprojects.com/) for the web UI

@@ -2,7 +2,15 @@
 """
 Research Paper Analysis - Web UI
 ================================
-A simple drag & drop interface for analyzing research papers.
+A drag & drop interface for analyzing research papers with Claude Opus 4.5.
+
+Features:
+- Single paper analysis with multiple prompt types
+- Batch upload and analysis
+- Paper comparison mode
+- Citation extraction and enrichment
+- Analysis history with SQLite persistence
+- Rate limiting and file size limits
 
 Usage:
     python web_app.py
@@ -14,63 +22,128 @@ import os
 from datetime import datetime
 from pathlib import Path
 from threading import Thread
+from functools import wraps
 
-import fitz  # PyMuPDF
 from flask import Flask, render_template_string, request, jsonify, send_file
 
 from claude_agent_sdk import query, ClaudeAgentOptions, AssistantMessage, ResultMessage
-from prompts import RESEARCH_ANALYSIS_PROMPT
+
+from config import (
+    DEFAULT_MODEL,
+    UPLOAD_DIR,
+    OUTPUT_DIR,
+    MAX_FILE_SIZE_MB,
+    MAX_TEXT_LENGTH,
+    MAX_UPLOADS_PER_HOUR,
+    FLASK_HOST,
+    FLASK_PORT,
+    FLASK_DEBUG,
+)
+from pdf_extractor import (
+    extract_pdf,
+    format_paper_for_analysis,
+    chunk_text,
+    extract_citations_from_text,
+)
+from prompts import (
+    RESEARCH_ANALYSIS_PROMPT,
+    get_prompt,
+    format_comparison_prompt,
+)
+from database import (
+    save_paper,
+    save_analysis,
+    update_analysis,
+    get_analysis,
+    list_analyses,
+    save_citations,
+    get_citations,
+    get_paper_by_hash,
+    get_paper,
+    check_rate_limit,
+    save_comparison,
+)
+from semantic_scholar import batch_enrich_citations
 
 app = Flask(__name__)
 
-# Store analysis results
-analyses = {}
-
-# Directories
-UPLOAD_DIR = Path(__file__).parent / "uploads"
-OUTPUT_DIR = Path(__file__).parent / "analyses"
-UPLOAD_DIR.mkdir(exist_ok=True)
-OUTPUT_DIR.mkdir(exist_ok=True)
+# In-memory store for active analyses (for real-time updates)
+active_analyses = {}
 
 
-def extract_text_from_pdf(pdf_path: Path) -> str:
-    """Extract text content from a PDF file."""
-    doc = fitz.open(pdf_path)
-    text_parts = []
-    for page_num, page in enumerate(doc, 1):
-        text = page.get_text()
-        if text.strip():
-            text_parts.append(f"--- Page {page_num} ---\n{text}")
-    doc.close()
-    return "\n\n".join(text_parts)
+def get_client_ip():
+    """Get client IP address."""
+    return request.headers.get('X-Forwarded-For', request.remote_addr)
 
 
-async def run_analysis(pdf_path: Path, analysis_id: str):
+async def run_analysis(pdf_path: Path, analysis_id: str, prompt_type: str = "default"):
     """Run the analysis agent and collect results."""
-    analyses[analysis_id] = {
+    active_analyses[analysis_id] = {
         "status": "extracting",
         "content": "",
         "filename": pdf_path.name,
-        "started": datetime.now().isoformat()
+        "started": datetime.now().isoformat(),
+        "model": DEFAULT_MODEL,
     }
 
     try:
-        # Extract text from PDF
-        text = extract_text_from_pdf(pdf_path)
-        text_file = UPLOAD_DIR / f"{pdf_path.stem}.txt"
-        text_file.write_text(text, encoding="utf-8")
+        # Extract PDF content
+        paper = extract_pdf(pdf_path)
+        formatted_text = format_paper_for_analysis(paper)
 
-        analyses[analysis_id]["status"] = "analyzing"
+        # Save paper to database
+        paper_id = save_paper(
+            filename=paper.filename,
+            filepath=str(pdf_path),
+            text_content=paper.text,
+            file_hash=paper.file_hash,
+            title=paper.title,
+            authors=paper.authors,
+            abstract=paper.abstract,
+            page_count=paper.page_count,
+            doi=paper.doi,
+            arxiv_id=paper.arxiv_id,
+        )
+
+        # Extract and enrich citations
+        citations = extract_citations_from_text(paper.text)
+        if citations:
+            citations = batch_enrich_citations(citations, max_enrichments=10)
+            save_citations(paper_id, citations)
+
+        active_analyses[analysis_id]["paper_id"] = paper_id
+        active_analyses[analysis_id]["title"] = paper.title
+        active_analyses[analysis_id]["doi"] = paper.doi
+        active_analyses[analysis_id]["citations_count"] = len(citations)
+
+        # Save analysis record
+        save_analysis(
+            analysis_id=analysis_id,
+            paper_id=paper_id,
+            status="analyzing",
+            model_used=DEFAULT_MODEL,
+            prompt_type=prompt_type,
+        )
+
+        active_analyses[analysis_id]["status"] = "analyzing"
+
+        # Handle long papers with chunking
+        text = formatted_text
+        if len(text) > MAX_TEXT_LENGTH:
+            chunks = chunk_text(text, 30000)
+            text = chunks[0]
+            text += f"\n\n[Note: Long paper truncated. Showing {len(text):,} of {len(formatted_text):,} characters.]"
 
         # Build prompt
-        context = f"Analyze this research paper:\n\n{text[:50000]}"  # Limit text size
-        full_prompt = f"{context}\n\n{RESEARCH_ANALYSIS_PROMPT}"
+        prompt = get_prompt(prompt_type)
+        full_prompt = f"Analyze this research paper:\n\n{text}\n\n{prompt}"
 
-        # Run analysis
+        # Run analysis with Opus 4.5
         content_parts = []
         async for message in query(
             prompt=full_prompt,
             options=ClaudeAgentOptions(
+                model=DEFAULT_MODEL,
                 allowed_tools=["WebSearch", "WebFetch"],
                 permission_mode="acceptEdits"
             )
@@ -79,15 +152,19 @@ async def run_analysis(pdf_path: Path, analysis_id: str):
                 for block in message.content:
                     if hasattr(block, "text") and block.text:
                         content_parts.append(block.text)
-                        analyses[analysis_id]["content"] = "\n\n".join(content_parts)
+                        active_analyses[analysis_id]["content"] = "\n\n".join(content_parts)
+
+        # Save final result
+        final_content = "\n\n".join(content_parts)
 
         # Save to markdown file
         output_file = OUTPUT_DIR / f"{pdf_path.stem}_analysis.md"
-        final_content = "\n\n".join(content_parts)
+        md_content = f"""# Analysis: {paper.title or pdf_path.name}
 
-        md_content = f"""# Analysis: {pdf_path.name}
-
+**Model:** {DEFAULT_MODEL}
 **Generated:** {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+**Prompt Type:** {prompt_type}
+{f"**DOI:** {paper.doi}" if paper.doi else ""}
 
 ---
 
@@ -95,22 +172,38 @@ async def run_analysis(pdf_path: Path, analysis_id: str):
 """
         output_file.write_text(md_content, encoding="utf-8")
 
-        analyses[analysis_id]["status"] = "complete"
-        analyses[analysis_id]["content"] = final_content
-        analyses[analysis_id]["output_file"] = str(output_file)
+        # Update database
+        update_analysis(
+            analysis_id=analysis_id,
+            status="complete",
+            content=final_content,
+        )
+
+        active_analyses[analysis_id]["status"] = "complete"
+        active_analyses[analysis_id]["content"] = final_content
+        active_analyses[analysis_id]["output_file"] = str(output_file)
 
     except Exception as e:
-        analyses[analysis_id]["status"] = "error"
-        analyses[analysis_id]["error"] = str(e)
+        active_analyses[analysis_id]["status"] = "error"
+        active_analyses[analysis_id]["error"] = str(e)
+        update_analysis(
+            analysis_id=analysis_id,
+            status="error",
+            error_message=str(e),
+        )
 
 
-def run_async_analysis(pdf_path: Path, analysis_id: str):
+def run_async_analysis(pdf_path: Path, analysis_id: str, prompt_type: str = "default"):
     """Run async analysis in a thread."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    loop.run_until_complete(run_analysis(pdf_path, analysis_id))
+    loop.run_until_complete(run_analysis(pdf_path, analysis_id, prompt_type))
     loop.close()
 
+
+# =============================================================================
+# HTML TEMPLATE
+# =============================================================================
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -118,298 +211,403 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Research Paper Analyzer</title>
+    <title>Research Paper Analyzer - Opus 4.5</title>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-            background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
             min-height: 100vh;
-            color: #2d3748;
+            color: #e4e4e7;
         }
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 2rem;
+        .container { max-width: 1400px; margin: 0 auto; padding: 2rem; }
+
+        header {
+            text-align: center;
+            margin-bottom: 2rem;
         }
         h1 {
-            text-align: center;
-            margin-bottom: 2rem;
             font-size: 2.5rem;
-            background: linear-gradient(90deg, #667eea, #764ba2);
+            background: linear-gradient(90deg, #7c3aed, #ec4899);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
+            margin-bottom: 0.5rem;
         }
-        .drop-zone {
-            border: 3px dashed #cbd5e0;
+        .subtitle {
+            color: #a1a1aa;
+            font-size: 1rem;
+        }
+        .model-badge {
+            display: inline-block;
+            background: rgba(124, 58, 237, 0.2);
+            border: 1px solid #7c3aed;
+            padding: 0.25rem 0.75rem;
             border-radius: 20px;
-            padding: 4rem 2rem;
+            font-size: 0.8rem;
+            margin-top: 0.5rem;
+        }
+
+        .main-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2rem;
+        }
+        @media (max-width: 1024px) {
+            .main-grid { grid-template-columns: 1fr; }
+        }
+
+        .panel {
+            background: rgba(255,255,255,0.05);
+            border-radius: 16px;
+            padding: 1.5rem;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .panel-title {
+            font-size: 1.2rem;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .drop-zone {
+            border: 2px dashed rgba(124, 58, 237, 0.5);
+            border-radius: 12px;
+            padding: 3rem 2rem;
             text-align: center;
-            background: rgba(255,255,255,0.7);
             transition: all 0.3s ease;
             cursor: pointer;
-            margin-bottom: 2rem;
+            background: rgba(124, 58, 237, 0.05);
         }
         .drop-zone:hover, .drop-zone.dragover {
-            border-color: #667eea;
-            background: rgba(102, 126, 234, 0.1);
-            transform: scale(1.01);
+            border-color: #7c3aed;
+            background: rgba(124, 58, 237, 0.15);
         }
-        .drop-zone-icon {
-            font-size: 4rem;
-            margin-bottom: 1rem;
-        }
-        .drop-zone-text {
-            font-size: 1.2rem;
-            color: #4a5568;
-        }
-        .drop-zone input {
-            display: none;
-        }
-        .status {
-            text-align: center;
-            padding: 1rem;
-            border-radius: 10px;
-            margin-bottom: 1rem;
-            display: none;
-        }
-        .status.visible {
-            display: block;
-        }
-        .status.extracting {
-            background: rgba(255, 193, 7, 0.15);
-            border: 1px solid #d69e2e;
-            color: #744210;
-        }
-        .status.analyzing {
-            background: rgba(102, 126, 234, 0.15);
-            border: 1px solid #667eea;
-            color: #434190;
-        }
-        .status.complete {
-            background: rgba(72, 187, 120, 0.15);
-            border: 1px solid #48bb78;
-            color: #276749;
-        }
-        .status.error {
-            background: rgba(245, 101, 101, 0.15);
-            border: 1px solid #f56565;
-            color: #c53030;
-        }
-        .result-container {
-            background: white;
-            border-radius: 15px;
-            padding: 2rem;
-            display: none;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
-        }
-        .result-container.visible {
-            display: block;
-        }
-        .result-header {
+        .drop-zone-icon { font-size: 3rem; margin-bottom: 1rem; }
+        .drop-zone input { display: none; }
+
+        .options-row {
             display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 1.5rem;
-            padding-bottom: 1rem;
-            border-bottom: 1px solid #e2e8f0;
+            gap: 1rem;
+            margin-top: 1rem;
+            flex-wrap: wrap;
         }
-        .result-title {
-            font-size: 1.3rem;
-            color: #667eea;
+        .option-group { flex: 1; min-width: 200px; }
+        .option-group label {
+            display: block;
+            font-size: 0.85rem;
+            color: #a1a1aa;
+            margin-bottom: 0.5rem;
         }
-        .export-btn {
-            background: linear-gradient(90deg, #667eea, #764ba2);
+        select, input[type="text"] {
+            width: 100%;
+            padding: 0.75rem;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.2);
+            background: rgba(0,0,0,0.3);
             color: white;
-            border: none;
+            font-size: 1rem;
+        }
+        select:focus, input:focus {
+            outline: none;
+            border-color: #7c3aed;
+        }
+
+        .btn {
             padding: 0.75rem 1.5rem;
             border-radius: 8px;
+            border: none;
             font-size: 1rem;
             cursor: pointer;
-            transition: transform 0.2s, box-shadow 0.2s;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
         }
-        .export-btn:hover {
+        .btn-primary {
+            background: linear-gradient(90deg, #7c3aed, #ec4899);
+            color: white;
+        }
+        .btn-primary:hover {
             transform: translateY(-2px);
-            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+            box-shadow: 0 5px 20px rgba(124, 58, 237, 0.4);
         }
+        .btn-secondary {
+            background: rgba(255,255,255,0.1);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+        .btn-secondary:hover { background: rgba(255,255,255,0.2); }
+
+        .status {
+            padding: 1rem;
+            border-radius: 8px;
+            margin: 1rem 0;
+            display: none;
+        }
+        .status.visible { display: block; }
+        .status.analyzing {
+            background: rgba(124, 58, 237, 0.2);
+            border: 1px solid #7c3aed;
+        }
+        .status.complete {
+            background: rgba(34, 197, 94, 0.2);
+            border: 1px solid #22c55e;
+        }
+        .status.error {
+            background: rgba(239, 68, 68, 0.2);
+            border: 1px solid #ef4444;
+        }
+
         .result-content {
-            background: #f7fafc;
-            border-radius: 10px;
+            background: rgba(0,0,0,0.3);
+            border-radius: 12px;
             padding: 1.5rem;
-            max-height: 70vh;
+            max-height: 60vh;
             overflow-y: auto;
             line-height: 1.7;
-            color: #2d3748;
         }
         .result-content h1, .result-content h2, .result-content h3 {
-            color: #553c9a;
+            color: #c4b5fd;
             margin-top: 1.5rem;
             margin-bottom: 0.75rem;
         }
-        .result-content h1 { font-size: 1.8rem; }
-        .result-content h2 { font-size: 1.4rem; }
-        .result-content h3 { font-size: 1.2rem; }
+        .result-content h1 { font-size: 1.5rem; }
+        .result-content h2 { font-size: 1.25rem; }
         .result-content p { margin-bottom: 1rem; }
         .result-content ul, .result-content ol {
             margin-left: 1.5rem;
             margin-bottom: 1rem;
         }
-        .result-content li { margin-bottom: 0.5rem; }
         .result-content table {
             width: 100%;
             border-collapse: collapse;
             margin: 1rem 0;
         }
         .result-content th, .result-content td {
-            border: 1px solid #e2e8f0;
-            padding: 0.75rem;
+            border: 1px solid rgba(255,255,255,0.2);
+            padding: 0.5rem;
             text-align: left;
         }
-        .result-content th {
-            background: rgba(102, 126, 234, 0.1);
-            color: #553c9a;
-        }
+        .result-content th { background: rgba(124, 58, 237, 0.2); }
         .result-content blockquote {
-            border-left: 3px solid #667eea;
+            border-left: 3px solid #7c3aed;
             padding-left: 1rem;
             margin: 1rem 0;
-            color: #718096;
-            background: #edf2f7;
-            padding: 1rem;
-            border-radius: 0 8px 8px 0;
+            color: #a1a1aa;
         }
         .result-content code {
-            background: #edf2f7;
+            background: rgba(0,0,0,0.5);
             padding: 0.2rem 0.4rem;
             border-radius: 4px;
-            font-family: 'Monaco', 'Menlo', monospace;
-            color: #553c9a;
+            font-family: monospace;
         }
-        .spinner {
-            display: inline-block;
-            width: 20px;
-            height: 20px;
-            border: 2px solid rgba(102, 126, 234, 0.3);
-            border-radius: 50%;
-            border-top-color: #667eea;
-            animation: spin 1s linear infinite;
-            margin-right: 0.5rem;
+
+        .history-list {
+            max-height: 300px;
+            overflow-y: auto;
         }
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-        .files-list {
-            margin-top: 2rem;
-            padding-top: 1rem;
-            border-top: 1px solid #e2e8f0;
-        }
-        .files-list h3 {
-            color: #4a5568;
-            margin-bottom: 1rem;
-        }
-        .file-item {
+        .history-item {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 0.75rem 1rem;
-            background: white;
+            padding: 0.75rem;
+            background: rgba(0,0,0,0.2);
             border-radius: 8px;
             margin-bottom: 0.5rem;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            cursor: pointer;
+            transition: background 0.2s;
         }
-        .file-item a {
-            color: #667eea;
-            text-decoration: none;
+        .history-item:hover { background: rgba(124, 58, 237, 0.2); }
+        .history-item-title { font-weight: 500; }
+        .history-item-meta { font-size: 0.8rem; color: #a1a1aa; }
+
+        .spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-radius: 50%;
+            border-top-color: #7c3aed;
+            animation: spin 1s linear infinite;
         }
-        .file-item a:hover {
-            text-decoration: underline;
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .citations-panel {
+            margin-top: 1rem;
+            padding: 1rem;
+            background: rgba(0,0,0,0.2);
+            border-radius: 8px;
+        }
+        .citation-item {
+            padding: 0.5rem 0;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        .citation-item:last-child { border-bottom: none; }
+
+        .tabs {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+        }
+        .tab {
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            cursor: pointer;
+            background: rgba(255,255,255,0.1);
+            transition: all 0.2s;
+        }
+        .tab:hover { background: rgba(255,255,255,0.2); }
+        .tab.active {
+            background: #7c3aed;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Research Paper Analyzer</h1>
+        <header>
+            <h1>Research Paper Analyzer</h1>
+            <p class="subtitle">Deep analysis powered by Claude</p>
+            <span class="model-badge">🧠 Opus 4.5</span>
+        </header>
 
-        <div class="drop-zone" id="dropZone">
-            <div class="drop-zone-icon">📄</div>
-            <div class="drop-zone-text">
-                Drag & drop a PDF here<br>
-                <small>or click to select</small>
+        <div class="main-grid">
+            <div class="left-column">
+                <div class="panel">
+                    <div class="panel-title">📄 Upload Paper</div>
+
+                    <div class="drop-zone" id="dropZone">
+                        <div class="drop-zone-icon">📄</div>
+                        <div>Drag & drop PDF here<br><small>or click to select (max """ + str(MAX_FILE_SIZE_MB) + """MB)</small></div>
+                        <input type="file" id="fileInput" accept=".pdf" multiple>
+                    </div>
+
+                    <div class="options-row">
+                        <div class="option-group">
+                            <label>Analysis Type</label>
+                            <select id="promptType">
+                                <option value="default">Full Analysis (4 stages)</option>
+                                <option value="quick">Quick Summary</option>
+                                <option value="methodology">Methodology Focus</option>
+                                <option value="contradictions">Critical Analysis</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="status" id="status"></div>
+                </div>
+
+                <div class="panel" style="margin-top: 1rem;">
+                    <div class="panel-title">📚 Analysis History</div>
+                    <div class="history-list" id="historyList">
+                        <div style="color: #a1a1aa; text-align: center; padding: 2rem;">
+                            Loading history...
+                        </div>
+                    </div>
+                </div>
             </div>
-            <input type="file" id="fileInput" accept=".pdf">
-        </div>
 
-        <div class="status" id="status"></div>
+            <div class="right-column">
+                <div class="panel" id="resultPanel" style="display: none;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                        <div class="panel-title" id="resultTitle">📊 Analysis Result</div>
+                        <button class="btn btn-secondary" id="exportBtn">📥 Export</button>
+                    </div>
 
-        <div class="result-container" id="resultContainer">
-            <div class="result-header">
-                <div class="result-title" id="resultTitle">Analysis Result</div>
-                <button class="export-btn" id="exportBtn">Export as Markdown</button>
+                    <div class="tabs">
+                        <div class="tab active" data-tab="analysis">Analysis</div>
+                        <div class="tab" data-tab="citations">Citations</div>
+                        <div class="tab" data-tab="metadata">Metadata</div>
+                    </div>
+
+                    <div id="analysisTab" class="result-content"></div>
+                    <div id="citationsTab" class="result-content" style="display: none;"></div>
+                    <div id="metadataTab" class="result-content" style="display: none;"></div>
+                </div>
+
+                <div class="panel" id="welcomePanel">
+                    <div style="text-align: center; padding: 3rem; color: #a1a1aa;">
+                        <div style="font-size: 4rem; margin-bottom: 1rem;">🔬</div>
+                        <h2 style="color: #e4e4e7; margin-bottom: 1rem;">Welcome to Research Paper Analyzer</h2>
+                        <p>Upload a PDF to get started with AI-powered paper analysis.</p>
+                        <div style="margin-top: 2rem; text-align: left; max-width: 400px; margin-left: auto; margin-right: auto;">
+                            <p><strong>Features:</strong></p>
+                            <ul style="margin-top: 0.5rem; margin-left: 1.5rem;">
+                                <li>Multi-stage deep analysis</li>
+                                <li>Citation extraction & enrichment</li>
+                                <li>Literature search suggestions</li>
+                                <li>Multiple analysis modes</li>
+                                <li>Persistent history</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
             </div>
-            <div class="result-content" id="resultContent"></div>
         </div>
-
-        <div class="files-list" id="filesList"></div>
     </div>
 
     <script>
         const dropZone = document.getElementById('dropZone');
         const fileInput = document.getElementById('fileInput');
+        const promptType = document.getElementById('promptType');
         const status = document.getElementById('status');
-        const resultContainer = document.getElementById('resultContainer');
-        const resultTitle = document.getElementById('resultTitle');
-        const resultContent = document.getElementById('resultContent');
+        const resultPanel = document.getElementById('resultPanel');
+        const welcomePanel = document.getElementById('welcomePanel');
+        const analysisTab = document.getElementById('analysisTab');
+        const citationsTab = document.getElementById('citationsTab');
+        const metadataTab = document.getElementById('metadataTab');
         const exportBtn = document.getElementById('exportBtn');
+        const historyList = document.getElementById('historyList');
 
         let currentAnalysisId = null;
-        let currentFilename = null;
-        let currentMarkdown = null;
+        let currentData = null;
 
-        // Drag & drop handlers
+        // Tab switching
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+
+                const tabName = tab.dataset.tab;
+                analysisTab.style.display = tabName === 'analysis' ? 'block' : 'none';
+                citationsTab.style.display = tabName === 'citations' ? 'block' : 'none';
+                metadataTab.style.display = tabName === 'metadata' ? 'block' : 'none';
+            });
+        });
+
+        // Drag & drop
         dropZone.addEventListener('click', () => fileInput.click());
-
-        dropZone.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            dropZone.classList.add('dragover');
-        });
-
-        dropZone.addEventListener('dragleave', () => {
-            dropZone.classList.remove('dragover');
-        });
-
-        dropZone.addEventListener('drop', (e) => {
+        dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+        dropZone.addEventListener('drop', e => {
             e.preventDefault();
             dropZone.classList.remove('dragover');
             const file = e.dataTransfer.files[0];
-            if (file && file.type === 'application/pdf') {
-                uploadFile(file);
-            }
+            if (file && file.type === 'application/pdf') uploadFile(file);
         });
-
         fileInput.addEventListener('change', () => {
-            if (fileInput.files[0]) {
-                uploadFile(fileInput.files[0]);
-            }
+            if (fileInput.files[0]) uploadFile(fileInput.files[0]);
         });
 
         async function uploadFile(file) {
+            // Check file size
+            if (file.size > """ + str(MAX_FILE_SIZE_MB * 1024 * 1024) + """) {
+                showStatus('error', 'File too large. Maximum size is """ + str(MAX_FILE_SIZE_MB) + """MB.');
+                return;
+            }
+
             const formData = new FormData();
             formData.append('file', file);
+            formData.append('prompt_type', promptType.value);
 
-            currentFilename = file.name;
-            showStatus('extracting', 'Uploading and extracting text from PDF...');
-            resultContainer.classList.remove('visible');
+            showStatus('analyzing', '<span class="spinner"></span> Uploading and analyzing with Opus 4.5...');
+            welcomePanel.style.display = 'none';
+            resultPanel.style.display = 'block';
+            analysisTab.innerHTML = '<div style="text-align: center; padding: 2rem;"><span class="spinner"></span> Extracting PDF content...</div>';
 
             try {
-                const response = await fetch('/upload', {
-                    method: 'POST',
-                    body: formData
-                });
+                const response = await fetch('/upload', { method: 'POST', body: formData });
                 const data = await response.json();
 
                 if (data.error) {
@@ -430,21 +628,40 @@ HTML_TEMPLATE = """
             try {
                 const response = await fetch(`/status/${currentAnalysisId}`);
                 const data = await response.json();
+                currentData = data;
 
                 if (data.status === 'extracting') {
-                    showStatus('extracting', '<span class="spinner"></span> Extracting text from PDF...');
+                    showStatus('analyzing', '<span class="spinner"></span> Extracting PDF content...');
+                    analysisTab.innerHTML = '<div style="text-align: center; padding: 2rem;"><span class="spinner"></span> Extracting text, tables, and citations...</div>';
                     setTimeout(pollStatus, 1000);
                 } else if (data.status === 'analyzing') {
-                    showStatus('analyzing', '<span class="spinner"></span> Analyzing paper with Claude...');
+                    showStatus('analyzing', '<span class="spinner"></span> Analyzing with Claude Opus 4.5...');
                     if (data.content) {
-                        showResult(data.content);
+                        analysisTab.innerHTML = marked.parse(data.content);
                     }
                     setTimeout(pollStatus, 2000);
                 } else if (data.status === 'complete') {
-                    showStatus('complete', 'Analysis complete!');
-                    showResult(data.content);
-                    currentMarkdown = data.content;
-                    loadFilesList();
+                    showStatus('complete', '✅ Analysis complete!');
+                    analysisTab.innerHTML = marked.parse(data.content);
+                    document.getElementById('resultTitle').textContent = '📊 ' + (data.title || data.filename);
+
+                    // Update citations tab
+                    if (data.citations_count > 0) {
+                        citationsTab.innerHTML = `<p><strong>${data.citations_count} citations extracted</strong></p><p>Citation enrichment via Semantic Scholar API.</p>`;
+                    } else {
+                        citationsTab.innerHTML = '<p>No citation identifiers found in this paper.</p>';
+                    }
+
+                    // Update metadata tab
+                    metadataTab.innerHTML = `
+                        <p><strong>File:</strong> ${data.filename}</p>
+                        ${data.title ? `<p><strong>Title:</strong> ${data.title}</p>` : ''}
+                        ${data.doi ? `<p><strong>DOI:</strong> ${data.doi}</p>` : ''}
+                        <p><strong>Model:</strong> ${data.model}</p>
+                        <p><strong>Analyzed:</strong> ${data.started}</p>
+                    `;
+
+                    loadHistory();
                 } else if (data.status === 'error') {
                     showStatus('error', 'Error: ' + data.error);
                 }
@@ -458,48 +675,70 @@ HTML_TEMPLATE = """
             status.innerHTML = message;
         }
 
-        function showResult(markdown) {
-            resultTitle.textContent = `Analysis: ${currentFilename}`;
-            resultContent.innerHTML = marked.parse(markdown);
-            resultContainer.classList.add('visible');
-        }
-
         exportBtn.addEventListener('click', () => {
-            if (!currentMarkdown) return;
+            if (!currentData || !currentData.content) return;
 
-            const blob = new Blob([`# Analysis: ${currentFilename}\\n\\n${currentMarkdown}`],
-                                  { type: 'text/markdown' });
+            const blob = new Blob([`# Analysis: ${currentData.title || currentData.filename}\\n\\n${currentData.content}`], { type: 'text/markdown' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = currentFilename.replace('.pdf', '_analysis.md');
+            a.download = (currentData.filename || 'analysis').replace('.pdf', '_analysis.md');
             a.click();
             URL.revokeObjectURL(url);
         });
 
-        async function loadFilesList() {
+        async function loadHistory() {
             try {
-                const response = await fetch('/files');
+                const response = await fetch('/history');
                 const data = await response.json();
 
-                if (data.files && data.files.length > 0) {
-                    const filesList = document.getElementById('filesList');
-                    filesList.innerHTML = '<h3>Previous Analyses</h3>' +
-                        data.files.map(f => `
-                            <div class="file-item">
-                                <a href="/download/${f}">${f}</a>
+                if (data.analyses && data.analyses.length > 0) {
+                    historyList.innerHTML = data.analyses.map(a => `
+                        <div class="history-item" onclick="loadAnalysis('${a.analysis_id}')">
+                            <div>
+                                <div class="history-item-title">${a.title || a.filename || 'Unknown'}</div>
+                                <div class="history-item-meta">${a.prompt_type} • ${a.started_at?.split('T')[0] || 'Unknown date'}</div>
                             </div>
-                        `).join('');
+                            <div class="history-item-meta">${a.status}</div>
+                        </div>
+                    `).join('');
+                } else {
+                    historyList.innerHTML = '<div style="color: #a1a1aa; text-align: center; padding: 2rem;">No analyses yet</div>';
                 }
-            } catch (e) {}
+            } catch (e) {
+                historyList.innerHTML = '<div style="color: #a1a1aa; text-align: center; padding: 2rem;">Failed to load history</div>';
+            }
         }
 
-        loadFilesList();
+        async function loadAnalysis(analysisId) {
+            try {
+                const response = await fetch(`/analysis/${analysisId}`);
+                const data = await response.json();
+
+                if (data.content) {
+                    currentData = data;
+                    welcomePanel.style.display = 'none';
+                    resultPanel.style.display = 'block';
+                    analysisTab.innerHTML = marked.parse(data.content);
+                    document.getElementById('resultTitle').textContent = '📊 ' + (data.title || data.filename || 'Analysis');
+                    showStatus('complete', '✅ Loaded from history');
+                }
+            } catch (e) {
+                showStatus('error', 'Failed to load analysis');
+            }
+        }
+
+        // Load history on page load
+        loadHistory();
     </script>
 </body>
 </html>
 """
 
+
+# =============================================================================
+# ROUTES
+# =============================================================================
 
 @app.route('/')
 def index():
@@ -508,6 +747,10 @@ def index():
 
 @app.route('/upload', methods=['POST'])
 def upload():
+    # Rate limiting
+    if not check_rate_limit(get_client_ip(), "upload", MAX_UPLOADS_PER_HOUR):
+        return jsonify({"error": f"Rate limit exceeded. Max {MAX_UPLOADS_PER_HOUR} uploads per hour."}), 429
+
     if 'file' not in request.files:
         return jsonify({"error": "No file provided"}), 400
 
@@ -515,15 +758,25 @@ def upload():
     if not file.filename.endswith('.pdf'):
         return jsonify({"error": "Only PDF files are supported"}), 400
 
+    # Check file size
+    file.seek(0, 2)
+    size = file.tell()
+    file.seek(0)
+    if size > MAX_FILE_SIZE_MB * 1024 * 1024:
+        return jsonify({"error": f"File too large. Maximum size is {MAX_FILE_SIZE_MB}MB."}), 400
+
     # Save the file
     pdf_path = UPLOAD_DIR / file.filename
     file.save(pdf_path)
+
+    # Get prompt type
+    prompt_type = request.form.get('prompt_type', 'default')
 
     # Generate analysis ID
     analysis_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{pdf_path.stem}"
 
     # Start analysis in background thread
-    thread = Thread(target=run_async_analysis, args=(pdf_path, analysis_id))
+    thread = Thread(target=run_async_analysis, args=(pdf_path, analysis_id, prompt_type))
     thread.start()
 
     return jsonify({"analysis_id": analysis_id})
@@ -531,9 +784,37 @@ def upload():
 
 @app.route('/status/<analysis_id>')
 def get_status(analysis_id):
-    if analysis_id not in analyses:
-        return jsonify({"error": "Analysis not found"}), 404
-    return jsonify(analyses[analysis_id])
+    # Check active analyses first
+    if analysis_id in active_analyses:
+        return jsonify(active_analyses[analysis_id])
+
+    # Check database
+    db_analysis = get_analysis(analysis_id)
+    if db_analysis:
+        return jsonify(db_analysis)
+
+    return jsonify({"error": "Analysis not found"}), 404
+
+
+@app.route('/analysis/<analysis_id>')
+def get_analysis_detail(analysis_id):
+    db_analysis = get_analysis(analysis_id)
+    if db_analysis:
+        # Get paper info if available
+        if db_analysis.get('paper_id'):
+            paper = get_paper(db_analysis['paper_id'])
+            if paper:
+                db_analysis['title'] = paper.get('title')
+                db_analysis['doi'] = paper.get('doi')
+                db_analysis['filename'] = paper.get('filename')
+        return jsonify(db_analysis)
+    return jsonify({"error": "Analysis not found"}), 404
+
+
+@app.route('/history')
+def get_history():
+    analyses = list_analyses(limit=50)
+    return jsonify({"analyses": analyses})
 
 
 @app.route('/files')
@@ -550,10 +831,18 @@ def download_file(filename):
     return jsonify({"error": "File not found"}), 404
 
 
+# =============================================================================
+# MAIN
+# =============================================================================
+
 if __name__ == '__main__':
-    print("\n" + "=" * 50)
+    print("\n" + "=" * 60)
     print("Research Paper Analyzer")
-    print("=" * 50)
-    print("\nOpen http://localhost:5000 in your browser")
-    print("Drag & drop a PDF to analyze it\n")
-    app.run(debug=False, port=5000)
+    print(f"Model: {DEFAULT_MODEL}")
+    print("=" * 60)
+    print(f"\nOpen http://localhost:{FLASK_PORT} in your browser")
+    print("Drag & drop a PDF to analyze it")
+    print(f"Max file size: {MAX_FILE_SIZE_MB}MB")
+    print(f"Rate limit: {MAX_UPLOADS_PER_HOUR} uploads/hour\n")
+
+    app.run(host=FLASK_HOST, port=FLASK_PORT, debug=FLASK_DEBUG)
