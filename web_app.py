@@ -217,9 +217,9 @@ HTML_TEMPLATE = """
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
             min-height: 100vh;
-            color: #e4e4e7;
+            color: #1e293b;
         }
         .container { max-width: 1400px; margin: 0 auto; padding: 2rem; }
 
@@ -235,13 +235,14 @@ HTML_TEMPLATE = """
             margin-bottom: 0.5rem;
         }
         .subtitle {
-            color: #a1a1aa;
+            color: #64748b;
             font-size: 1rem;
         }
         .model-badge {
             display: inline-block;
-            background: rgba(124, 58, 237, 0.2);
+            background: rgba(124, 58, 237, 0.1);
             border: 1px solid #7c3aed;
+            color: #7c3aed;
             padding: 0.25rem 0.75rem;
             border-radius: 20px;
             font-size: 0.8rem;
@@ -258,10 +259,11 @@ HTML_TEMPLATE = """
         }
 
         .panel {
-            background: rgba(255,255,255,0.05);
+            background: #ffffff;
             border-radius: 16px;
             padding: 1.5rem;
-            border: 1px solid rgba(255,255,255,0.1);
+            border: 1px solid #e2e8f0;
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
         }
         .panel-title {
             font-size: 1.2rem;
@@ -269,20 +271,21 @@ HTML_TEMPLATE = """
             display: flex;
             align-items: center;
             gap: 0.5rem;
+            color: #334155;
         }
 
         .drop-zone {
-            border: 2px dashed rgba(124, 58, 237, 0.5);
+            border: 2px dashed #7c3aed;
             border-radius: 12px;
             padding: 3rem 2rem;
             text-align: center;
             transition: all 0.3s ease;
             cursor: pointer;
-            background: rgba(124, 58, 237, 0.05);
+            background: #faf5ff;
         }
         .drop-zone:hover, .drop-zone.dragover {
-            border-color: #7c3aed;
-            background: rgba(124, 58, 237, 0.15);
+            border-color: #6d28d9;
+            background: #f3e8ff;
         }
         .drop-zone-icon { font-size: 3rem; margin-bottom: 1rem; }
         .drop-zone input { display: none; }
@@ -297,21 +300,22 @@ HTML_TEMPLATE = """
         .option-group label {
             display: block;
             font-size: 0.85rem;
-            color: #a1a1aa;
+            color: #64748b;
             margin-bottom: 0.5rem;
         }
         select, input[type="text"] {
             width: 100%;
             padding: 0.75rem;
             border-radius: 8px;
-            border: 1px solid rgba(255,255,255,0.2);
-            background: rgba(0,0,0,0.3);
-            color: white;
+            border: 1px solid #cbd5e1;
+            background: #ffffff;
+            color: #1e293b;
             font-size: 1rem;
         }
         select:focus, input:focus {
             outline: none;
             border-color: #7c3aed;
+            box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.1);
         }
 
         .btn {
@@ -334,11 +338,11 @@ HTML_TEMPLATE = """
             box-shadow: 0 5px 20px rgba(124, 58, 237, 0.4);
         }
         .btn-secondary {
-            background: rgba(255,255,255,0.1);
-            color: white;
-            border: 1px solid rgba(255,255,255,0.2);
+            background: #f1f5f9;
+            color: #475569;
+            border: 1px solid #cbd5e1;
         }
-        .btn-secondary:hover { background: rgba(255,255,255,0.2); }
+        .btn-secondary:hover { background: #e2e8f0; }
 
         .status {
             padding: 1rem;
@@ -348,28 +352,32 @@ HTML_TEMPLATE = """
         }
         .status.visible { display: block; }
         .status.analyzing {
-            background: rgba(124, 58, 237, 0.2);
+            background: #f3e8ff;
             border: 1px solid #7c3aed;
+            color: #6d28d9;
         }
         .status.complete {
-            background: rgba(34, 197, 94, 0.2);
+            background: #dcfce7;
             border: 1px solid #22c55e;
+            color: #166534;
         }
         .status.error {
-            background: rgba(239, 68, 68, 0.2);
+            background: #fee2e2;
             border: 1px solid #ef4444;
+            color: #dc2626;
         }
 
         .result-content {
-            background: rgba(0,0,0,0.3);
+            background: #f8fafc;
             border-radius: 12px;
             padding: 1.5rem;
             max-height: 60vh;
             overflow-y: auto;
             line-height: 1.7;
+            border: 1px solid #e2e8f0;
         }
         .result-content h1, .result-content h2, .result-content h3 {
-            color: #c4b5fd;
+            color: #7c3aed;
             margin-top: 1.5rem;
             margin-bottom: 0.75rem;
         }
@@ -386,22 +394,24 @@ HTML_TEMPLATE = """
             margin: 1rem 0;
         }
         .result-content th, .result-content td {
-            border: 1px solid rgba(255,255,255,0.2);
+            border: 1px solid #e2e8f0;
             padding: 0.5rem;
             text-align: left;
         }
-        .result-content th { background: rgba(124, 58, 237, 0.2); }
+        .result-content th { background: #f3e8ff; color: #6d28d9; }
         .result-content blockquote {
             border-left: 3px solid #7c3aed;
             padding-left: 1rem;
             margin: 1rem 0;
-            color: #a1a1aa;
+            color: #64748b;
+            background: #faf5ff;
         }
         .result-content code {
-            background: rgba(0,0,0,0.5);
+            background: #f1f5f9;
             padding: 0.2rem 0.4rem;
             border-radius: 4px;
             font-family: monospace;
+            color: #7c3aed;
         }
 
         .history-list {
@@ -413,21 +423,22 @@ HTML_TEMPLATE = """
             justify-content: space-between;
             align-items: center;
             padding: 0.75rem;
-            background: rgba(0,0,0,0.2);
+            background: #f8fafc;
             border-radius: 8px;
             margin-bottom: 0.5rem;
             cursor: pointer;
             transition: background 0.2s;
+            border: 1px solid #e2e8f0;
         }
-        .history-item:hover { background: rgba(124, 58, 237, 0.2); }
-        .history-item-title { font-weight: 500; }
-        .history-item-meta { font-size: 0.8rem; color: #a1a1aa; }
+        .history-item:hover { background: #f3e8ff; border-color: #7c3aed; }
+        .history-item-title { font-weight: 500; color: #334155; }
+        .history-item-meta { font-size: 0.8rem; color: #64748b; }
 
         .spinner {
             display: inline-block;
             width: 16px;
             height: 16px;
-            border: 2px solid rgba(255,255,255,0.3);
+            border: 2px solid #e2e8f0;
             border-radius: 50%;
             border-top-color: #7c3aed;
             animation: spin 1s linear infinite;
@@ -437,12 +448,13 @@ HTML_TEMPLATE = """
         .citations-panel {
             margin-top: 1rem;
             padding: 1rem;
-            background: rgba(0,0,0,0.2);
+            background: #f8fafc;
             border-radius: 8px;
+            border: 1px solid #e2e8f0;
         }
         .citation-item {
             padding: 0.5rem 0;
-            border-bottom: 1px solid rgba(255,255,255,0.1);
+            border-bottom: 1px solid #e2e8f0;
         }
         .citation-item:last-child { border-bottom: none; }
 
@@ -455,10 +467,11 @@ HTML_TEMPLATE = """
             padding: 0.5rem 1rem;
             border-radius: 8px;
             cursor: pointer;
-            background: rgba(255,255,255,0.1);
+            background: #f1f5f9;
+            color: #475569;
             transition: all 0.2s;
         }
-        .tab:hover { background: rgba(255,255,255,0.2); }
+        .tab:hover { background: #e2e8f0; }
         .tab.active {
             background: #7c3aed;
         }

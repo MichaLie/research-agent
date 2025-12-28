@@ -13,6 +13,9 @@ papers/
 papers_text/
 uploads/
 analyses/
+data/
+*.db
+output/
 
 # IDE
 .idea/
