@@ -445,18 +445,26 @@ HTML_TEMPLATE = """
         }
         @keyframes spin { to { transform: rotate(360deg); } }
 
-        .citations-panel {
+        .citations-panel, .citations-list {
             margin-top: 1rem;
-            padding: 1rem;
-            background: #f8fafc;
-            border-radius: 8px;
-            border: 1px solid #e2e8f0;
         }
         .citation-item {
-            padding: 0.5rem 0;
-            border-bottom: 1px solid #e2e8f0;
+            padding: 0.75rem;
+            margin-bottom: 0.5rem;
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
         }
-        .citation-item:last-child { border-bottom: none; }
+        .citation-item:hover {
+            border-color: #7c3aed;
+        }
+        .citation-item a {
+            color: #7c3aed;
+            text-decoration: none;
+        }
+        .citation-item a:hover {
+            text-decoration: underline;
+        }
 
         .tabs {
             display: flex;
@@ -544,12 +552,15 @@ HTML_TEMPLATE = """
                                 <option value="quick">Quick Summary</option>
                                 <option value="methodology">Methodology Focus</option>
                                 <option value="contradictions">Critical Analysis</option>
-                                <option value="brutal">Brutal Critic (Reviewer 2 Mode)</option>
+                                <option value="brutal" style="color: #dc2626;">🔥 Brutal Critic (Reviewer 2)</option>
                             </select>
                         </div>
                     </div>
 
                     <div class="status" id="status"></div>
+                    <div class="brutal-warning" id="brutalWarning" style="display: none; background: #fef2f2; border: 1px solid #fca5a5; border-radius: 8px; padding: 0.75rem; margin-top: 1rem; color: #dc2626;">
+                        ⚠️ <strong>Brutal Critic Mode:</strong> This will ruthlessly tear apart your paper. No mercy. Perfect for pre-submission stress testing!
+                    </div>
                 </div>
 
                 <div class="panel" style="margin-top: 1rem;">
@@ -566,7 +577,17 @@ HTML_TEMPLATE = """
                 <div class="panel" id="resultPanel" style="display: none;">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
                         <div class="panel-title" id="resultTitle">📊 Analysis Result</div>
-                        <button class="btn btn-secondary" id="exportBtn">📥 Export</button>
+                        <div style="display: flex; gap: 0.5rem; align-items: center;">
+                            <select id="reanalyzeType" style="padding: 0.5rem; border-radius: 6px; border: 1px solid #cbd5e1;">
+                                <option value="default">Full Analysis</option>
+                                <option value="quick">Quick Summary</option>
+                                <option value="methodology">Methodology</option>
+                                <option value="contradictions">Critical</option>
+                                <option value="brutal">🔥 Brutal Critic</option>
+                            </select>
+                            <button class="btn btn-primary" id="reanalyzeBtn" style="padding: 0.5rem 1rem;">Re-analyze</button>
+                            <button class="btn btn-secondary" id="exportBtn">📥 Export</button>
+                        </div>
                     </div>
 
                     <div class="tabs">
@@ -625,10 +646,13 @@ HTML_TEMPLATE = """
 
         let currentAnalysisId = null;
         let currentData = null;
+        let currentPaperId = null;
         const chatSection = document.getElementById('chatSection');
         const chatMessages = document.getElementById('chatMessages');
         const chatInput = document.getElementById('chatInput');
         const chatSendBtn = document.getElementById('chatSendBtn');
+        const reanalyzeBtn = document.getElementById('reanalyzeBtn');
+        const reanalyzeType = document.getElementById('reanalyzeType');
 
         // Tab switching
         document.querySelectorAll('.tab').forEach(tab => {
@@ -641,6 +665,12 @@ HTML_TEMPLATE = """
                 citationsTab.style.display = tabName === 'citations' ? 'block' : 'none';
                 metadataTab.style.display = tabName === 'metadata' ? 'block' : 'none';
             });
+        });
+
+        // Show/hide brutal warning
+        const brutalWarning = document.getElementById('brutalWarning');
+        promptType.addEventListener('change', () => {
+            brutalWarning.style.display = promptType.value === 'brutal' ? 'block' : 'none';
         });
 
         // Drag & drop
@@ -711,12 +741,28 @@ HTML_TEMPLATE = """
                     showStatus('complete', '✅ Analysis complete!');
                     analysisTab.innerHTML = marked.parse(data.content);
                     document.getElementById('resultTitle').textContent = '📊 ' + (data.title || data.filename);
+                    currentPaperId = data.paper_id;  // Store for re-analysis
 
                     // Update citations tab
-                    if (data.citations_count > 0) {
-                        citationsTab.innerHTML = `<p><strong>${data.citations_count} citations extracted</strong></p><p>Citation enrichment via Semantic Scholar API.</p>`;
+                    if (data.citations && data.citations.length > 0) {
+                        let citHtml = `<p><strong>${data.citations.length} citations extracted</strong></p>`;
+                        citHtml += '<div class="citations-list">';
+                        data.citations.forEach((cit, i) => {
+                            citHtml += `<div class="citation-item">
+                                <div><strong>${i+1}.</strong> ${cit.title || cit.doi || cit.arxiv_id || 'Unknown'}</div>
+                                ${cit.authors ? `<div style="color: #64748b; font-size: 0.9rem;">${cit.authors}</div>` : ''}
+                                <div style="font-size: 0.85rem; color: #7c3aed;">
+                                    ${cit.year ? `${cit.year}` : ''}
+                                    ${cit.venue ? `• ${cit.venue}` : ''}
+                                    ${cit.doi ? `• <a href="https://doi.org/${cit.doi}" target="_blank">DOI</a>` : ''}
+                                    ${cit.arxiv_id ? `• <a href="https://arxiv.org/abs/${cit.arxiv_id}" target="_blank">arXiv</a>` : ''}
+                                </div>
+                            </div>`;
+                        });
+                        citHtml += '</div>';
+                        citationsTab.innerHTML = citHtml;
                     } else {
-                        citationsTab.innerHTML = '<p>No citation identifiers found in this paper.</p>';
+                        citationsTab.innerHTML = '<p>No citation identifiers (DOIs, arXiv IDs) found in this paper.</p>';
                     }
 
                     // Update metadata tab
@@ -756,6 +802,40 @@ HTML_TEMPLATE = """
             a.download = (currentData.filename || 'analysis').replace('.pdf', '_analysis.md');
             a.click();
             URL.revokeObjectURL(url);
+        });
+
+        // Re-analyze with different prompt
+        reanalyzeBtn.addEventListener('click', async () => {
+            if (!currentPaperId) {
+                showStatus('error', 'No paper loaded to re-analyze');
+                return;
+            }
+
+            const newPromptType = reanalyzeType.value;
+            showStatus('analyzing', `<span class="spinner"></span> Re-analyzing with ${newPromptType} mode...`);
+            analysisTab.innerHTML = '<div style="text-align: center; padding: 2rem;"><span class="spinner"></span> Running new analysis...</div>';
+
+            try {
+                const response = await fetch('/reanalyze', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        paper_id: currentPaperId,
+                        prompt_type: newPromptType
+                    })
+                });
+                const data = await response.json();
+
+                if (data.error) {
+                    showStatus('error', data.error);
+                    return;
+                }
+
+                currentAnalysisId = data.analysis_id;
+                pollStatus();
+            } catch (error) {
+                showStatus('error', 'Re-analyze failed: ' + error.message);
+            }
         });
 
         async function loadHistory() {
@@ -905,11 +985,22 @@ def upload():
 def get_status(analysis_id):
     # Check active analyses first
     if analysis_id in active_analyses:
-        return jsonify(active_analyses[analysis_id])
+        data = active_analyses[analysis_id].copy()
+        # Add citations if available
+        if data.get('paper_id'):
+            citations = get_citations(data['paper_id'])
+            data['citations'] = citations
+            data['citations_count'] = len(citations)
+        return jsonify(data)
 
     # Check database
     db_analysis = get_analysis(analysis_id)
     if db_analysis:
+        # Add citations
+        if db_analysis.get('paper_id'):
+            citations = get_citations(db_analysis['paper_id'])
+            db_analysis['citations'] = citations
+            db_analysis['citations_count'] = len(citations)
         return jsonify(db_analysis)
 
     return jsonify({"error": "Analysis not found"}), 404
@@ -948,6 +1039,93 @@ def download_file(filename):
     if file_path.exists():
         return send_file(file_path, as_attachment=True)
     return jsonify({"error": "File not found"}), 404
+
+
+@app.route('/reanalyze', methods=['POST'])
+def reanalyze():
+    """Re-analyze an existing paper with a different prompt type."""
+    data = request.get_json()
+    paper_id = data.get('paper_id')
+    prompt_type = data.get('prompt_type', 'default')
+
+    if not paper_id:
+        return jsonify({"error": "Missing paper_id"}), 400
+
+    # Get paper from database
+    paper = get_paper(paper_id)
+    if not paper:
+        return jsonify({"error": "Paper not found"}), 404
+
+    # Generate new analysis ID
+    analysis_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{paper['filename'].replace('.pdf', '')}_{prompt_type}"
+
+    # Start analysis in background
+    def run_reanalysis():
+        import asyncio
+        from prompts import get_prompt
+
+        # Initialize analysis
+        active_analyses[analysis_id] = {
+            "status": "analyzing",
+            "paper_id": paper_id,
+            "filename": paper['filename'],
+            "title": paper.get('title'),
+            "model": DEFAULT_MODEL,
+            "started": datetime.now().isoformat(),
+        }
+
+        # Save to database
+        save_analysis(
+            analysis_id=analysis_id,
+            paper_id=paper_id,
+            status="analyzing",
+            model_used=DEFAULT_MODEL,
+            prompt_type=prompt_type,
+        )
+
+        # Get prompt and paper text
+        prompt = get_prompt(prompt_type)
+        text = paper.get('text_content', '')[:MAX_TEXT_LENGTH]
+        full_prompt = f"Analyze this research paper:\\n\\n{text}\\n\\n{prompt}"
+
+        # Run analysis
+        async def do_analysis():
+            content_parts = []
+            async for message in query(
+                prompt=full_prompt,
+                options=ClaudeAgentOptions(
+                    model=DEFAULT_MODEL,
+                    allowed_tools=["WebSearch", "WebFetch"],
+                    permission_mode="default"
+                )
+            ):
+                if isinstance(message, AssistantMessage):
+                    for block in message.content:
+                        if hasattr(block, "text") and block.text:
+                            content_parts.append(block.text)
+                            active_analyses[analysis_id]["content"] = "\\n\\n".join(content_parts)
+            return "\\n\\n".join(content_parts)
+
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            final_content = loop.run_until_complete(do_analysis())
+            loop.close()
+
+            active_analyses[analysis_id]["status"] = "complete"
+            active_analyses[analysis_id]["content"] = final_content
+
+            update_analysis(analysis_id, status="complete", content=final_content)
+
+        except Exception as e:
+            active_analyses[analysis_id]["status"] = "error"
+            active_analyses[analysis_id]["error"] = str(e)
+            update_analysis(analysis_id, status="error", error_message=str(e))
+
+    thread = Thread(target=run_reanalysis)
+    thread.start()
+
+    return jsonify({"analysis_id": analysis_id})
 
 
 @app.route('/chat', methods=['POST'])
